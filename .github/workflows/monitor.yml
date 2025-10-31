@@ -1,0 +1,81 @@
+name: Website Monitor (Telegram)
+
+on:
+  schedule:
+    # Chạy mỗi 5 phút (khuyến nghị). Có thể đổi thành "*/1 * * * *" nhưng
+    # GitHub không đảm bảo chính xác từng phút.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}  # cho phép chạy tay
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    env:
+      URL: "https://thegioidentrangtri.com/"
+      RETRIES: "3"          # số lần thử
+      RETRY_DELAY: "10"     # giây giữa các lần thử
+      TIMEOUT: "10"         # giây timeout mỗi lần
+      EXPECT_CODE_MIN: "200"
+      EXPECT_CODE_MAX: "399"
+
+    steps:
+      - name: Kiểm tra website & gửi cảnh báo nếu DOWN
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          URL="${URL}"
+          RETRIES="${RETRIES}"
+          RETRY_DELAY="${RETRY_DELAY}"
+          TIMEOUT="${TIMEOUT}"
+          MIN="${EXPECT_CODE_MIN}"
+          MAX="${EXPECT_CODE_MAX}"
+
+          echo "Checking: $URL"
+          fails=0
+          codes=()
+
+          for i in $(seq 1 "$RETRIES"); do
+            start_ts=$(date +%s%3N || true)
+            # dùng curl HEAD trước, nếu bị block thì GET nhẹ
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$TIMEOUT" -I "$URL" || echo "000")
+            if [ "$code" = "000" ] || [ "$code" -lt "$MIN" ] || [ "$code" -gt "$MAX" ]; then
+              # thử GET nếu HEAD thất bại/khác mong đợi
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$TIMEOUT" "$URL" || echo "000")
+            fi
+            end_ts=$(date +%s%3N || true)
+            rt=$((end_ts - start_ts))
+            codes+=("$code")
+
+            if [ "$code" = "000" ] || [ "$code" -lt "$MIN" ] || [ "$code" -gt "$MAX" ]; then
+              echo "Attempt $i/$RETRIES: FAIL (HTTP $code, ${rt}ms)"
+              fails=$((fails+1))
+            else
+              echo "Attempt $i/$RETRIES: OK   (HTTP $code, ${rt}ms)"
+            fi
+
+            if [ "$i" -lt "$RETRIES" ]; then
+              sleep "$RETRY_DELAY"
+            fi
+          done
+
+          # Hàm gửi Telegram
+          send_tg () {
+            local text="$1"
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+              --data-urlencode "text=${text}" >/dev/null
+          }
+
+          if [ "$fails" -eq "$RETRIES" ]; then
+            # TẤT CẢ đều fail → coi như DOWN
+            now="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+            joined="$(IFS=, ; echo "${codes[*]}")"
+            msg="🔴 DOWN: ${URL}%0AHTTP codes: ${joined}%0ATime: ${now}%0AHost: ${GITHUB_REPOSITORY} / ${GITHUB_WORKFLOW}"
+            echo "==> DOWN. Sending Telegram..."
+            send_tg "$msg"
+            exit 1
+          else
+            echo "==> UP (at least one attempt succeeded)."
+          fi
