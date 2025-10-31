@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      URL: "https://thegioidentrangtri.com/"
+      URL: "https://thegioidentrangtriiii.com/"
       RETRIES: "3"          # số lần thử
       RETRY_DELAY: "10"     # giây giữa các lần thử
       TIMEOUT: "10"         # giây timeout mỗi lần
